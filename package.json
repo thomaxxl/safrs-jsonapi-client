@@ -1,0 +1,48 @@
+{
+  "name": "safrs-jsonapi-client",
+  "version": "0.1.0",
+  "description": "JSON:API client for SAFrs/ApiLogicServer with React-admin adapter",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "safrs-jsonapi-smoke": "dist/cli/smoke.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/cli/smoke.ts --format esm,cjs --dts --out-dir dist --clean",
+    "smoke": "node dist/cli/smoke.js",
+    "demo:nw": "node demos/nw/cli.cjs",
+    "fixtures:fetch": "node scripts/fetch-fixtures.mjs",
+    "test": "jest",
+    "test:integration": "RUN_INTEGRATION=1 jest --runInBand test/integration",
+    "test:watch": "jest --watch",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "cross-fetch": "^4.0.0",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.17.24",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.3.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.8.2"
+  }
+}
