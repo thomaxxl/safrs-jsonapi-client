@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "JSON:API client for SAFrs/ApiLogicServer with React-admin adapter",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thomaxxl/safrs-jsonapi-client.git"
+  },
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -24,14 +28,15 @@
   },
   "scripts": {
     "build": "tsup src/index.ts src/cli/smoke.ts --format esm,cjs --dts --out-dir dist --clean",
+    "prepack": "npm run build",
+    "pack:release": "npm pack",
     "smoke": "node dist/cli/smoke.js",
     "demo:nw": "node demos/nw/cli.cjs",
     "fixtures:fetch": "node scripts/fetch-fixtures.mjs",
     "test": "jest",
     "test:integration": "RUN_INTEGRATION=1 jest --runInBand test/integration",
     "test:watch": "jest --watch",
-    "typecheck": "tsc --noEmit",
-    "prepare": "npm run build"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "cross-fetch": "^4.0.0",

@@ -25,11 +25,53 @@ Backlog in base milestone:
 npm install
 ```
 
+## Consumer install model
+
+This package is intended to be consumed from GitHub without publishing to npm.
+
+Recommended approach:
+
+1. build and pack the library locally
+2. attach the generated `.tgz` from `npm pack` to a GitHub release
+3. install consumers from that immutable release asset URL
+
+Example consumer dependency:
+
+```json
+{
+  "dependencies": {
+    "safrs-jsonapi-client": "https://github.com/thomaxxl/safrs-jsonapi-client/releases/download/v0.1.0/safrs-jsonapi-client-0.1.0.tgz"
+  }
+}
+```
+
+Do not rely on raw GitHub source archives such as `codeload.github.com/.../tar.gz/<sha>`
+for consumers of this package. Those archives are source snapshots, not packed
+package artifacts, and they do not guarantee the built `dist/` files exported
+by `package.json`.
+
 ## Build
 
 ```bash
 npm run build
 ```
+
+## Release artifact
+
+Create a GitHub-release install artifact with:
+
+```bash
+npm run pack:release
+```
+
+This runs the `prepack` hook, rebuilds `dist/`, and produces a tarball such as:
+
+```text
+safrs-jsonapi-client-0.1.0.tgz
+```
+
+Attach that tarball to the matching GitHub release and use the release asset
+URL in downstream apps.
 
 ## Test
 
