@@ -118,3 +118,50 @@ const dataProvider = await createDataProvider({
   apiRoot: 'https://your-api.example.com/api/'
 });
 ```
+
+## Custom Methods: `execute()`
+
+The React-admin adapter exposes a custom `execute()` method for SAFRS RPC-style
+endpoints and raw JSON service calls.
+
+```ts
+import { useDataProvider } from 'react-admin';
+import type { SafrsDataProvider } from 'safrs-jsonapi-client';
+
+const dataProvider = useDataProvider<SafrsDataProvider>();
+
+await dataProvider.execute('People', {
+  id: 1,
+  action: 'send_mail',
+  method: 'POST',
+  args: {
+    email: 'x@y.test'
+  }
+});
+```
+
+Default behavior is RPC mode:
+
+- request body is wrapped as `{"meta":{"args": ...}}`
+- `GET` calls move `args` into the query string
+- scalar RPC responses are unwrapped from `meta.result`
+- JSON:API resource responses are normalized like the built-in CRUD methods
+
+Use raw mode to send and receive plain JSON:
+
+```ts
+await dataProvider.execute('Reports', {
+  action: 'run',
+  mode: 'raw',
+  method: 'POST',
+  body: {
+    from: '2026-01-01',
+    to: '2026-01-31'
+  }
+});
+```
+
+`execute()` shares the same auth header hook, JSON:API error mapping, and
+`AbortSignal` wiring as the CRUD methods. For React Query usage, call it through
+`useDataProvider()` and invalidate or refresh the relevant query keys after
+mutations.

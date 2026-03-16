@@ -1,6 +1,5 @@
 import {
   CreateDataProviderOptions,
-  DataProvider,
   DataProviderListParams,
   JsonApiDocument,
   RecordData,
@@ -13,6 +12,7 @@ import {
   buildOneQuery,
   queryToSearchParams
 } from '../query/buildQuery';
+import { buildExecuteUrl } from '../query/buildExecuteUrl';
 import { getDefaultFetch, getBrowserLocation } from '../config/runtime';
 import { createHttpClient } from '../transport/http';
 import { normalizeAdminYaml } from '../schema/normalizeAdminYaml';
@@ -22,6 +22,7 @@ import { normalizeDocument } from '../normalize/normalizeDocument';
 import { getTotal } from '../normalize/getTotal';
 import { synthesizeCompositeKeys } from '../normalize/synthesizeCompositeKeys';
 import { mergeForUpdate, sanitizeAttributes } from '../write/sanitize';
+import { ExecuteParams, ExecuteResult, SafrsDataProvider } from './executeTypes';
 
 function appendQuery(url: string, query: Record<string, string | number | boolean>): string {
   const params = queryToSearchParams(query);
@@ -165,10 +166,76 @@ function hasPrimaryData(
   return !!value && typeof value === 'object' && 'data' in value;
 }
 
+function hasJsonApiDocumentShape(
+  value: unknown
+): value is { data?: unknown; errors?: unknown; meta?: Record<string, unknown> } {
+  return !!value && typeof value === 'object' && ('data' in value || 'errors' in value);
+}
+
+function hasMetaResult(
+  value: unknown
+): value is { meta: Record<string, unknown> & { result: unknown } } {
+  return (
+    !!value
+    && typeof value === 'object'
+    && 'meta' in value
+    && !!(value as { meta?: unknown }).meta
+    && typeof (value as { meta: unknown }).meta === 'object'
+    && 'result' in ((value as { meta: Record<string, unknown> }).meta)
+  );
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function encodeRawBody(
+  payload: unknown
+): { body?: BodyInit; contentType?: string } {
+  if (payload === undefined || payload === null) {
+    return {};
+  }
+
+  if (
+    typeof payload === 'string'
+    || payload instanceof Blob
+    || payload instanceof FormData
+    || payload instanceof URLSearchParams
+    || payload instanceof ArrayBuffer
+    || ArrayBuffer.isView(payload)
+  ) {
+    return {
+      body: payload as BodyInit,
+      contentType:
+        payload instanceof Blob && payload.type
+          ? payload.type
+          : payload instanceof FormData
+            ? undefined
+            : 'application/json'
+    };
+  }
+
+  if (isPlainObject(payload) || Array.isArray(payload) || typeof payload !== 'object') {
+    return {
+      body: JSON.stringify(payload),
+      contentType: 'application/json'
+    };
+  }
+
+  return {
+    body: payload as BodyInit
+  };
+}
+
 function createAdapter(
   schema: Schema,
   options: CreateDataProviderOptions
-): DataProvider {
+): SafrsDataProvider {
   const fetchImpl = options.fetch ?? getDefaultFetch();
   const logger = options.logger ?? console;
   const delimiter = options.delimiter ?? schema.delimiter;
@@ -214,7 +281,8 @@ function createAdapter(
       resource,
       data,
       'list',
-      params?.meta
+      params?.meta,
+      params?.signal
     );
 
     return {
@@ -317,7 +385,8 @@ function createAdapter(
     resource: string,
     records: RecordData[],
     op: 'list' | 'one' | 'manyReference',
-    meta: Record<string, unknown> | undefined
+    meta: Record<string, unknown> | undefined,
+    signal?: AbortSignal
   ): Promise<RecordData[]> {
     if (records.length === 0) {
       return records;
@@ -389,7 +458,9 @@ function createAdapter(
 
       let relatedById: Map<string, RecordData> = new Map();
       try {
-        const { json } = await http.requestJson<JsonApiDocument>(url);
+        const { json } = await http.requestJson<JsonApiDocument>(url, {
+          signal
+        });
         const normalized = normalizeDocument(json, {
           schema,
           resourceEndpoint: targetResource,
@@ -424,7 +495,13 @@ function createAdapter(
 
   async function performUpdate(
     resource: string,
-    params: { id: string | number; data: Record<string, unknown>; previousData?: Record<string, unknown>; meta?: Record<string, unknown> }
+    params: {
+      id: string | number;
+      data: Record<string, unknown>;
+      previousData?: Record<string, unknown>;
+      meta?: Record<string, unknown>;
+      signal?: AbortSignal;
+    }
   ): Promise<{ data: RecordData }> {
     const incomingId = params.data.id;
     if (incomingId !== undefined && incomingId !== null && String(incomingId) !== String(params.id)) {
@@ -440,7 +517,8 @@ function createAdapter(
 
     const { json } = await http.requestJson<JsonApiDocument>(url, {
       method: 'PATCH',
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: params.signal
     });
 
     return {
@@ -462,13 +540,15 @@ function createAdapter(
 
   async function performDelete(
     resource: string,
-    idValue: string | number
+    idValue: string | number,
+    signal?: AbortSignal
   ): Promise<{ data: RecordData }> {
     const id = encodeURIComponent(String(idValue));
     const url = `${apiRoot}${resource}/${id}`;
 
     const { json } = await http.requestJson<JsonApiDocument | Record<string, unknown> | null>(url, {
-      method: 'DELETE'
+      method: 'DELETE',
+      signal
     });
     const deleteResponse = json;
 
@@ -490,7 +570,37 @@ function createAdapter(
     };
   }
 
+  function normalizeExecuteData(
+    decoded: { data?: unknown; meta?: Record<string, unknown> }
+  ): RecordData | RecordData[] | null {
+    if (!('data' in decoded) || decoded.data === undefined || decoded.data === null) {
+      return null;
+    }
+
+    const jsonApiDoc = decoded as JsonApiDocument;
+    const normalized = normalizeDocument(jsonApiDoc, {
+      schema,
+      delimiter,
+      logger
+    });
+
+    const records = normalized.records.map((record) => {
+      const resourceType = typeof record.ja_type === 'string' ? record.ja_type : undefined;
+      const targetResource = resourceType ? schema.resourceByType[resourceType] : undefined;
+      return targetResource
+        ? synthesizeCompositeKeys(record, targetResource, schema, delimiter)
+        : record;
+    });
+
+    if (Array.isArray(decoded.data)) {
+      return records;
+    }
+
+    return records[0] ?? null;
+  }
+
   return {
+    supportAbortSignal: true,
     async getList(resource, params = {}) {
       if (!schema.resources[resource]) {
         throw new Error(`Unknown resource: ${resource}`);
@@ -504,7 +614,9 @@ function createAdapter(
       });
 
       const url = appendQuery(`${apiRoot}${resource}`, query);
-      const { json } = await http.requestJson<JsonApiDocument>(url);
+      const { json } = await http.requestJson<JsonApiDocument>(url, {
+        signal: params.signal
+      });
       return normalizeCollection(resource, json, params);
     },
 
@@ -521,7 +633,9 @@ function createAdapter(
 
       const id = encodeURIComponent(String(params.id));
       const url = appendQuery(`${apiRoot}${resource}/${id}`, query);
-      const { json } = await http.requestJson<JsonApiDocument>(url);
+      const { json } = await http.requestJson<JsonApiDocument>(url, {
+        signal: params.signal
+      });
 
       const includeTomany = shouldHydrateTomany(
         schema,
@@ -547,7 +661,8 @@ function createAdapter(
         resource,
         [record],
         'one',
-        params.meta
+        params.meta,
+        params.signal
       );
 
       return {
@@ -566,7 +681,9 @@ function createAdapter(
         logger
       });
       const url = appendQuery(`${apiRoot}${resource}`, query);
-      const { json } = await http.requestJson<JsonApiDocument>(url);
+      const { json } = await http.requestJson<JsonApiDocument>(url, {
+        signal: params.signal
+      });
 
       const includeTomany = shouldHydrateTomany(
         schema,
@@ -602,7 +719,9 @@ function createAdapter(
         logger
       });
       const url = appendQuery(`${apiRoot}${resource}`, query);
-      const { json } = await http.requestJson<JsonApiDocument>(url);
+      const { json } = await http.requestJson<JsonApiDocument>(url, {
+        signal: params.signal
+      });
 
       const includeTomany = shouldHydrateTomany(
         schema,
@@ -625,7 +744,8 @@ function createAdapter(
           synthesizeCompositeKeys(record, resource, schema, delimiter)
         ),
         'manyReference',
-        params.meta
+        params.meta,
+        params.signal
       );
 
       return {
@@ -643,7 +763,8 @@ function createAdapter(
       const url = `${apiRoot}${resource}`;
       const { json } = await http.requestJson<JsonApiDocument>(url, {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: params.signal
       });
 
       return {
@@ -681,7 +802,8 @@ function createAdapter(
           performUpdate(resource, {
             id,
             data: params.data,
-            meta: params.meta
+            meta: params.meta,
+            signal: params.signal
           })
         )
       );
@@ -696,7 +818,84 @@ function createAdapter(
         throw new Error(`Unknown resource: ${resource}`);
       }
 
-      return performDelete(resource, params.id);
+      return performDelete(resource, params.id, params.signal);
+    },
+
+    async execute<T = unknown>(
+      resource: string,
+      params: ExecuteParams
+    ): Promise<ExecuteResult<T>> {
+      const method = (params.method ?? 'POST').toUpperCase() as NonNullable<ExecuteParams['method']>;
+      const mode = params.mode ?? 'rpc';
+      const responseType = params.responseType ?? 'json';
+      const validJsonapi = params.validJsonapi !== false;
+      const url = buildExecuteUrl(apiRoot, resource, {
+        ...params,
+        method
+      });
+
+      const requestInit: Parameters<typeof http.request>[1] = {
+        method,
+        signal: params.signal,
+        responseType,
+        accept:
+          responseType === 'json'
+            ? 'application/vnd.api+json, application/json'
+            : responseType === 'text'
+              ? 'text/plain, */*'
+              : '*/*'
+      };
+
+      if (method !== 'GET') {
+        if (mode === 'raw') {
+          const rawBody = encodeRawBody(params.body);
+          requestInit.body = rawBody.body;
+          requestInit.contentType = rawBody.contentType;
+        } else if (validJsonapi) {
+          requestInit.body = JSON.stringify({
+            meta: {
+              args: params.args ?? {}
+            }
+          });
+          requestInit.contentType = 'application/vnd.api+json';
+        } else {
+          requestInit.body = JSON.stringify(params.args ?? {});
+          requestInit.contentType = 'application/json';
+        }
+      }
+
+      const { data: decoded } = await http.request<unknown>(url, requestInit);
+
+      if (mode === 'raw' || responseType !== 'json') {
+        return {
+          data: decoded as T
+        };
+      }
+
+      if (hasJsonApiDocumentShape(decoded)) {
+        return {
+          data: normalizeExecuteData(decoded) as T,
+          meta: decoded.meta
+        };
+      }
+
+      if (hasMetaResult(decoded)) {
+        return {
+          data: decoded.meta.result as T,
+          meta: decoded.meta
+        };
+      }
+
+      if (decoded && typeof decoded === 'object' && 'meta' in decoded) {
+        return {
+          data: decoded as T,
+          meta: (decoded as { meta?: unknown }).meta
+        };
+      }
+
+      return {
+        data: decoded as T
+      };
     },
 
     async deleteMany(resource, params) {
@@ -705,7 +904,7 @@ function createAdapter(
       }
 
       await Promise.all(
-        params.ids.map((id) => performDelete(resource, id))
+        params.ids.map((id) => performDelete(resource, id, params.signal))
       );
 
       return {
@@ -717,14 +916,14 @@ function createAdapter(
 
 export async function createDataProvider(
   options: CreateDataProviderOptions = {}
-): Promise<DataProvider> {
+): Promise<SafrsDataProvider> {
   const schema = await loadSchemaIfNeeded(options);
   return createAdapter(schema, options);
 }
 
 export function createDataProviderSync(
   options: CreateDataProviderOptions
-): DataProvider {
+): SafrsDataProvider {
   const schema = ensureSchema(options);
   return createAdapter(schema, options);
 }

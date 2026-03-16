@@ -5,6 +5,7 @@ export * from './schema/loadAdminYaml';
 export * from './schema/resolveApiRoot';
 
 export * from './query/buildQuery';
+export * from './query/buildExecuteUrl';
 
 export * from './transport/http';
 
@@ -15,3 +16,4 @@ export * from './normalize/synthesizeCompositeKeys';
 export * from './write/sanitize';
 
 export * from './react-admin/createDataProvider';
+export * from './react-admin/executeTypes';

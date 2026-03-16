@@ -1,5 +1,7 @@
 import {
   CreateHttpClientOptions,
+  HttpDecodedResponse,
+  HttpRequestOptions,
   HttpResponse,
   JsonApiDocument,
   JsonApiErrorObject
@@ -40,44 +42,59 @@ function pickErrorMessage(
   );
 }
 
+function parseJsonPayload(
+  text: string,
+  url: string,
+  logger?: CreateHttpClientOptions['logger']
+): unknown {
+  if (text.length === 0) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    logger?.warn?.('request: failed to parse response JSON', { url, error });
+    return text;
+  }
+}
+
 export function createHttpClient(options: CreateHttpClientOptions) {
   const logger = options.logger;
 
-  async function requestJson<T = JsonApiDocument>(
+  async function request<T = unknown>(
     url: string,
-    init?: RequestInit
-  ): Promise<HttpResponse<T>> {
+    init: HttpRequestOptions = {}
+  ): Promise<HttpDecodedResponse<T>> {
     const authHeaders = (await options.getAuthHeaders?.()) ?? {};
+    const {
+      responseType = 'json',
+      accept,
+      contentType,
+      ...fetchInit
+    } = init;
     const baseHeaders: Record<string, string> = {
-      Accept: 'application/vnd.api+json',
+      Accept: accept ?? 'application/vnd.api+json',
       ...authHeaders
     };
 
-    const hasBody = Boolean(init?.body);
-    if (hasBody) {
-      baseHeaders['Content-Type'] = 'application/vnd.api+json';
+    const hasBody = fetchInit.body !== undefined && fetchInit.body !== null;
+    if (hasBody && contentType) {
+      baseHeaders['Content-Type'] = contentType;
     }
 
     const response = await options.fetch(url, {
-      ...init,
+      ...fetchInit,
       headers: {
         ...baseHeaders,
-        ...(init?.headers ?? {})
+        ...(fetchInit.headers ?? {})
       }
     });
 
-    const text = await response.text();
-    let payload: unknown = null;
-    if (text.length > 0) {
-      try {
-        payload = JSON.parse(text) as unknown;
-      } catch (error) {
-        logger?.warn?.('requestJson: failed to parse response JSON', { url, error });
-        payload = text;
-      }
-    }
-
     if (!response.ok) {
+      const text = await response.text();
+      const payload = parseJsonPayload(text, url, logger);
+
       if (hasJsonApiErrors(payload)) {
         const msg = pickErrorMessage(response.status, response.statusText, payload.errors);
         throw new JsonApiHttpError(msg, response.status, payload, payload.errors);
@@ -86,19 +103,55 @@ export function createHttpClient(options: CreateHttpClientOptions) {
       const fallback =
         typeof payload === 'object' && payload && 'message' in (payload as Record<string, unknown>)
           ? String((payload as Record<string, unknown>).message)
-          : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
+          : typeof payload === 'string' && payload.trim().length > 0
+            ? payload
+            : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
 
       throw new JsonApiHttpError(fallback, response.status, payload);
+    }
+
+    let data: unknown;
+    if (responseType === 'text') {
+      data = await response.text();
+    } else if (responseType === 'blob') {
+      data = await response.blob();
+    } else {
+      const text = await response.text();
+      data = parseJsonPayload(text, url, logger);
+      if (hasJsonApiErrors(data)) {
+        const msg = pickErrorMessage(response.status, response.statusText, data.errors);
+        throw new JsonApiHttpError(msg, response.status, data, data.errors);
+      }
     }
 
     return {
       status: response.status,
       headers: response.headers,
-      json: payload as T
+      data: data as T
+    };
+  }
+
+  async function requestJson<T = JsonApiDocument>(
+    url: string,
+    init?: RequestInit
+  ): Promise<HttpResponse<T>> {
+    const hasBody = init?.body !== undefined && init.body !== null;
+    const response = await request<T>(url, {
+      ...init,
+      responseType: 'json',
+      accept: 'application/vnd.api+json',
+      contentType: hasBody ? 'application/vnd.api+json' : undefined
+    });
+
+    return {
+      status: response.status,
+      headers: response.headers,
+      json: response.data
     };
   }
 
   return {
+    request,
     requestJson
   };
 }

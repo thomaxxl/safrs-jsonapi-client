@@ -135,6 +135,20 @@ export interface HttpResponse<T = unknown> {
   json: T;
 }
 
+export type HttpResponseType = 'json' | 'text' | 'blob';
+
+export interface HttpRequestOptions extends RequestInit {
+  responseType?: HttpResponseType;
+  accept?: string;
+  contentType?: string;
+}
+
+export interface HttpDecodedResponse<T = unknown> {
+  status: number;
+  headers: Headers;
+  data: T;
+}
+
 export type FetchLike = (
   input: RequestInfo | URL,
   init?: RequestInit
@@ -153,16 +167,19 @@ export interface DataProviderListParams {
   sort?: { field?: string; order?: 'ASC' | 'DESC' | string };
   filter?: Record<string, unknown>;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProviderOneParams {
   id: string | number;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProviderManyParams {
   ids: Array<string | number>;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProviderManyReferenceParams {
@@ -172,11 +189,13 @@ export interface DataProviderManyReferenceParams {
   sort?: { field?: string; order?: 'ASC' | 'DESC' | string };
   filter?: Record<string, unknown>;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProviderCreateParams {
   data: Record<string, unknown>;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProviderUpdateParams {
@@ -184,25 +203,30 @@ export interface DataProviderUpdateParams {
   data: Record<string, unknown>;
   previousData?: Record<string, unknown>;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProviderDeleteParams {
   id: string | number;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProviderUpdateManyParams {
   ids: Array<string | number>;
   data: Record<string, unknown>;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProviderDeleteManyParams {
   ids: Array<string | number>;
   meta?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface DataProvider {
+  supportAbortSignal?: boolean;
   getList: (
     resource: string,
     params?: DataProviderListParams
